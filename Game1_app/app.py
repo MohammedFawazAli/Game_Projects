@@ -2,11 +2,9 @@ import streamlit as st
 import numpy as np
 import random
 import time
-import os
 import datetime
-from collections import deque
 
-# --- 8-Puzzle Logic (from learning.py) ---
+# --- 8-Puzzle Logic ---
 class EightPuzzleEnv:
     def __init__(self):
         self.size = 3
@@ -30,7 +28,6 @@ class EightPuzzleEnv:
                 if arr[i] > arr[j]: inv += 1
         return inv % 2 == 0
 
-# --- A* Search Implementation ---
 def manhattan_distance(state, goal):
     size = int(len(state) ** 0.5)
     dist = 0
@@ -105,6 +102,10 @@ def init_state():
         st.session_state.difficulty = 'Medium'
     if 'leaderboard' not in st.session_state:
         st.session_state.leaderboard = []
+    if 'solution_path' not in st.session_state:
+        st.session_state.solution_path = []
+    if 'solution_step' not in st.session_state:
+        st.session_state.solution_step = 0
 
 init_state()
 
@@ -129,6 +130,8 @@ def scramble():
     st.session_state.elapsed_time = 0.0
     st.session_state.start_time = time.time()
     st.session_state.timer_running = True
+    st.session_state.solution_path = []
+    st.session_state.solution_step = 0
 
 def random_scramble():
     while True:
@@ -143,6 +146,8 @@ def random_scramble():
     st.session_state.elapsed_time = 0.0
     st.session_state.start_time = time.time()
     st.session_state.timer_running = True
+    st.session_state.solution_path = []
+    st.session_state.solution_step = 0
 
 def move_tile(idx):
     zero_idx = st.session_state.state.index(0)
@@ -158,34 +163,42 @@ def move_tile(idx):
         if st.session_state.move_count == 1:
             st.session_state.start_time = time.time()
             st.session_state.timer_running = True
+        st.session_state.solution_path = []
+        st.session_state.solution_step = 0
 
 def undo():
     if len(st.session_state.history) > 1:
         st.session_state.future.append(st.session_state.history.pop())
         st.session_state.state = st.session_state.history[-1]
         st.session_state.move_count = max(0, st.session_state.move_count - 1)
+        st.session_state.solution_path = []
+        st.session_state.solution_step = 0
 
 def redo():
     if st.session_state.future:
         st.session_state.state = st.session_state.future.pop()
         st.session_state.history.append(st.session_state.state)
         st.session_state.move_count += 1
+        st.session_state.solution_path = []
+        st.session_state.solution_step = 0
 
 def solve():
     solution = a_star(st.session_state.state, st.session_state.env.goal)
     if not solution:
         st.warning("No solution found.")
+        st.session_state.solution_path = []
+        st.session_state.solution_step = 0
         return
-    for s in solution[1:]:
-        st.session_state.state = s
+    st.session_state.solution_path = solution
+    st.session_state.solution_step = 0
+
+def next_move():
+    if st.session_state.solution_path and st.session_state.solution_step < len(st.session_state.solution_path) - 1:
+        st.session_state.solution_step += 1
+        st.session_state.state = st.session_state.solution_path[st.session_state.solution_step]
         st.session_state.move_count += 1
         st.session_state.history.append(st.session_state.state)
         st.session_state.future = []
-        st.experimental_rerun()
-        time.sleep(0.25)
-    st.success("Solved!")
-    st.session_state.timer_running = False
-    save_leaderboard_entry()
 
 def save_leaderboard_entry():
     if st.session_state.move_count == 0 or st.session_state.elapsed_time < 0.01:
@@ -239,6 +252,10 @@ with col2:
     if st.button("Solve"):
         solve()
         st.experimental_rerun()
+    if st.session_state.solution_path and st.session_state.solution_step < len(st.session_state.solution_path) - 1:
+        if st.button("Next Move"):
+            next_move()
+            st.experimental_rerun()
     st.button("Undo", on_click=undo)
     st.button("Redo", on_click=redo)
     st.selectbox("Difficulty", ["Easy", "Medium", "Hard"], key='difficulty')
@@ -251,4 +268,4 @@ with col2:
 
 # --- Timer Update ---
 if st.session_state.timer_running:
-    update_timer() 
+    update_timer()
