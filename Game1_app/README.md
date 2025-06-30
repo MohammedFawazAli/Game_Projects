@@ -1,4 +1,4 @@
-# 🤩 8-Puzzle Solver Game
+# 🧩 8-Puzzle Solver Game
 
 A desktop application for the classic **8-Puzzle Game**, built with **Python** and **Tkinter**.
 This app allows you to **play, scramble, and solve** the puzzle interactively, with features like an automatic solver using the **A\*** algorithm and a **leaderboard** to track your best performances!
