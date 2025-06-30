@@ -1,7 +1,9 @@
-import streamlit as st
 import numpy as np
 import random
+import tkinter as tk
 import time
+from threading import Thread
+import os
 import datetime
 
 # --- 8-Puzzle Logic ---
@@ -76,196 +78,287 @@ def a_star(start, goal):
                 ))
     return None
 
-# --- Streamlit App ---
-st.set_page_config(page_title="8-Puzzle Solver", layout="centered")
-st.title("8-Puzzle Solver 🧩")
+class EightPuzzleGUI:
+    LEADERBOARD_FILE = 'leaderboard.txt'
+    LEADERBOARD_SIZE = 10
 
-# --- Session State Initialization ---
-def init_state():
-    if 'env' not in st.session_state:
-        st.session_state.env = EightPuzzleEnv()
-    if 'state' not in st.session_state:
-        st.session_state.state = st.session_state.env.goal
-    if 'move_count' not in st.session_state:
-        st.session_state.move_count = 0
-    if 'history' not in st.session_state:
-        st.session_state.history = [st.session_state.env.goal]
-    if 'future' not in st.session_state:
-        st.session_state.future = []
-    if 'start_time' not in st.session_state:
-        st.session_state.start_time = None
-    if 'elapsed_time' not in st.session_state:
-        st.session_state.elapsed_time = 0.0
-    if 'timer_running' not in st.session_state:
-        st.session_state.timer_running = False
-    if 'difficulty' not in st.session_state:
-        st.session_state.difficulty = 'Medium'
-    if 'leaderboard' not in st.session_state:
-        st.session_state.leaderboard = []
-    if 'solution_path' not in st.session_state:
-        st.session_state.solution_path = []
-    if 'solution_step' not in st.session_state:
-        st.session_state.solution_step = 0
+    def __init__(self, master):
+        self.master = master
+        master.title("8-Puzzle Solver")
+        self.env = EightPuzzleEnv()
+        self.state = self.env.goal
+        self.buttons = []
+        self.move_count = 0
+        self.solving = False
+        self.start_time = None
+        self.elapsed_time = 0
+        self.timer_running = False
+        self.timer_id = None
+        self.history = []  # For undo
+        self.future = []   # For redo
+        self.difficulty = tk.StringVar(value="Medium")
+        self.create_widgets()
+        self.update_grid()
 
-init_state()
+    def create_widgets(self):
+        self.frame = tk.Frame(self.master, bg="#222")
+        self.frame.pack(pady=10)
+        self.tile_size = 100  # Fixed size for square tiles
+        for i in range(3):
+            row = []
+            for j in range(3):
+                btn = tk.Button(self.frame, text='', width=1, height=1, font=('Arial', 32, 'bold'),
+                                relief='raised', bd=4, bg="#f0e68c", fg="#222",
+                                activebackground="#ffe4b5",
+                                command=lambda x=i, y=j: self.move_tile(x, y))
+                btn.grid(row=i, column=j, padx=2, pady=2, sticky="nsew")
+                btn.config(width=self.tile_size//10, height=self.tile_size//30)
+                row.append(btn)
+            self.buttons.append(row)
+        for i in range(3):
+            self.frame.grid_rowconfigure(i, weight=1, minsize=self.tile_size)
+            self.frame.grid_columnconfigure(i, weight=1, minsize=self.tile_size)
 
-def get_scramble_depth():
-    diff = st.session_state.difficulty
-    if diff == "Easy":
-        return 15
-    elif diff == "Medium":
-        return 30
-    else:
-        return 50
+        control = tk.Frame(self.master, bg="#222")
+        control.pack(pady=5)
+        self.scramble_btn = tk.Button(control, text="Scramble", command=self.scramble, width=10)
+        self.scramble_btn.pack(side=tk.LEFT, padx=5)
+        self.solve_btn = tk.Button(control, text="Solve", command=self.solve, width=10)
+        self.solve_btn.pack(side=tk.LEFT, padx=5)
+        self.random_btn = tk.Button(control, text="Random", command=self.random_scramble, width=10)
+        self.random_btn.pack(side=tk.LEFT, padx=5)
+        self.undo_btn = tk.Button(control, text="Undo", command=self.undo, width=10)
+        self.undo_btn.pack(side=tk.LEFT, padx=5)
+        self.redo_btn = tk.Button(control, text="Redo", command=self.redo, width=10)
+        self.redo_btn.pack(side=tk.LEFT, padx=5)
 
-def scramble():
-    st.session_state.state = st.session_state.env.goal
-    depth = get_scramble_depth()
-    for _ in range(depth):
-        neighbors = get_neighbors(st.session_state.state, 3)
-        st.session_state.state = random.choice(neighbors)
-    st.session_state.move_count = 0
-    st.session_state.history = [st.session_state.state]
-    st.session_state.future = []
-    st.session_state.elapsed_time = 0.0
-    st.session_state.start_time = time.time()
-    st.session_state.timer_running = True
-    st.session_state.solution_path = []
-    st.session_state.solution_step = 0
+        # Difficulty selector
+        tk.Label(control, text="Difficulty:", bg="#222", fg="#fff", font=('Arial', 12)).pack(side=tk.LEFT, padx=5)
+        self.difficulty_menu = tk.OptionMenu(control, self.difficulty, "Easy", "Medium", "Hard")
+        self.difficulty_menu.config(width=8)
+        self.difficulty_menu.pack(side=tk.LEFT, padx=5)
 
-def random_scramble():
-    while True:
-        perm = list(range(9))
-        random.shuffle(perm)
-        if st.session_state.env._is_solvable(perm):
-            st.session_state.state = tuple(perm)
-            break
-    st.session_state.move_count = 0
-    st.session_state.history = [st.session_state.state]
-    st.session_state.future = []
-    st.session_state.elapsed_time = 0.0
-    st.session_state.start_time = time.time()
-    st.session_state.timer_running = True
-    st.session_state.solution_path = []
-    st.session_state.solution_step = 0
+        self.leaderboard_btn = tk.Button(control, text="Leaderboard", command=self.show_leaderboard, width=12)
+        self.leaderboard_btn.pack(side=tk.LEFT, padx=5)
 
-def move_tile(idx):
-    zero_idx = st.session_state.state.index(0)
-    zx, zy = divmod(zero_idx, 3)
-    x, y = divmod(idx, 3)
-    if abs(zx - x) + abs(zy - y) == 1:
-        lst = list(st.session_state.state)
-        lst[zero_idx], lst[idx] = lst[idx], lst[zero_idx]
-        st.session_state.state = tuple(lst)
-        st.session_state.move_count += 1
-        st.session_state.history.append(st.session_state.state)
-        st.session_state.future = []
-        if st.session_state.move_count == 1:
-            st.session_state.start_time = time.time()
-            st.session_state.timer_running = True
-        st.session_state.solution_path = []
-        st.session_state.solution_step = 0
+        info = tk.Frame(self.master, bg="#222")
+        info.pack(pady=5)
+        self.move_label = tk.Label(info, text="Moves: 0", font=('Arial', 14), bg="#222", fg="#fff")
+        self.move_label.pack(side=tk.LEFT, padx=10)
+        self.time_label = tk.Label(info, text="Time: 0.0s", font=('Arial', 14), bg="#222", fg="#fff")
+        self.time_label.pack(side=tk.LEFT, padx=10)
+        self.status_label = tk.Label(info, text="", font=('Arial', 14, 'bold'), bg="#222", fg="#90ee90")
+        self.status_label.pack(side=tk.LEFT, padx=10)
 
-def undo():
-    if len(st.session_state.history) > 1:
-        st.session_state.future.append(st.session_state.history.pop())
-        st.session_state.state = st.session_state.history[-1]
-        st.session_state.move_count = max(0, st.session_state.move_count - 1)
-        st.session_state.solution_path = []
-        st.session_state.solution_step = 0
+    def update_grid(self):
+        for i in range(3):
+            for j in range(3):
+                val = self.state[i*3 + j]
+                btn = self.buttons[i][j]
+                btn['image'] = ''
+                if val == 0:
+                    btn['text'] = ''
+                    btn['bg'] = "#d3d3d3"
+                    btn['activebackground'] = "#d3d3d3"
+                else:
+                    btn['text'] = str(val)
+                    btn['bg'] = "#f0e68c"
+                    btn['activebackground'] = "#ffe4b5"
+        self.move_label['text'] = f"Moves: {self.move_count}"
+        self.time_label['text'] = f"Time: {self.elapsed_time:.1f}s"
+        self.status_label['text'] = ""
+        if self.state == self.env.goal:
+            self.status_label['text'] = "Solved!"
+            self.stop_timer()
+            self.save_leaderboard_entry()
 
-def redo():
-    if st.session_state.future:
-        st.session_state.state = st.session_state.future.pop()
-        st.session_state.history.append(st.session_state.state)
-        st.session_state.move_count += 1
-        st.session_state.solution_path = []
-        st.session_state.solution_step = 0
+    def start_timer(self):
+        if not self.timer_running:
+            self.start_time = time.time() - self.elapsed_time
+            self.timer_running = True
+            self.update_timer()
 
-def solve():
-    solution = a_star(st.session_state.state, st.session_state.env.goal)
-    if not solution:
-        st.warning("No solution found.")
-        st.session_state.solution_path = []
-        st.session_state.solution_step = 0
-        return
-    st.session_state.solution_path = solution
-    st.session_state.solution_step = 0
+    def update_timer(self):
+        if self.timer_running:
+            self.elapsed_time = time.time() - self.start_time
+            self.time_label['text'] = f"Time: {self.elapsed_time:.1f}s"
+            self.timer_id = self.master.after(100, self.update_timer)
 
-def next_move():
-    if st.session_state.solution_path and st.session_state.solution_step < len(st.session_state.solution_path) - 1:
-        st.session_state.solution_step += 1
-        st.session_state.state = st.session_state.solution_path[st.session_state.solution_step]
-        st.session_state.move_count += 1
-        st.session_state.history.append(st.session_state.state)
-        st.session_state.future = []
+    def stop_timer(self):
+        if self.timer_running:
+            self.timer_running = False
+            if self.timer_id:
+                self.master.after_cancel(self.timer_id)
+                self.timer_id = None
 
-def save_leaderboard_entry():
-    if st.session_state.move_count == 0 or st.session_state.elapsed_time < 0.01:
-        return
-    entry = {
-        'moves': st.session_state.move_count,
-        'time': round(st.session_state.elapsed_time, 2),
-        'difficulty': st.session_state.difficulty,
-        'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }
-    st.session_state.leaderboard.append(entry)
-    st.session_state.leaderboard.sort(key=lambda e: (e['moves'], e['time']))
-    st.session_state.leaderboard = st.session_state.leaderboard[:10]
+    def reset_timer(self):
+        self.stop_timer()
+        self.elapsed_time = 0
+        self.time_label['text'] = "Time: 0.0s"
 
-def update_timer():
-    if st.session_state.timer_running:
-        st.session_state.elapsed_time = time.time() - st.session_state.start_time
-        st.experimental_rerun()
+    def get_scramble_depth(self):
+        diff = self.difficulty.get()
+        if diff == "Easy":
+            return 15
+        elif diff == "Medium":
+            return 30
+        else:
+            return 50
 
-# --- UI Layout ---
-col1, col2 = st.columns([2, 1])
+    def scramble(self):
+        if self.solving: return
+        self.state = self.env.goal
+        depth = self.get_scramble_depth()
+        for _ in range(depth):
+            neighbors = get_neighbors(self.state, 3)
+            self.state = random.choice(neighbors)
+        self.move_count = 0
+        self.history = [self.state]
+        self.future = []
+        self.reset_timer()
+        self.update_grid()
+        self.start_timer()
 
-with col1:
-    st.subheader("Puzzle Board")
-    grid = np.array(st.session_state.state).reshape((3, 3))
-    for i in range(3):
-        cols = st.columns(3)
-        for j in range(3):
-            val = grid[i, j]
-            if val == 0:
-                cols[j].button(" ", key=f"tile_{i}_{j}", disabled=True)
-            else:
-                if cols[j].button(str(val), key=f"tile_{i}_{j}"):
-                    move_tile(i*3 + j)
-                    st.experimental_rerun()
-    st.write(f"Moves: {st.session_state.move_count}")
-    st.write(f"Time: {st.session_state.elapsed_time:.1f}s")
-    if st.session_state.state == st.session_state.env.goal:
-        st.success("Solved!")
-        st.session_state.timer_running = False
-        save_leaderboard_entry()
+    def random_scramble(self):
+        if self.solving: return
+        while True:
+            perm = list(range(9))
+            random.shuffle(perm)
+            if self.env._is_solvable(perm):
+                self.state = tuple(perm)
+                break
+        self.move_count = 0
+        self.history = [self.state]
+        self.future = []
+        self.reset_timer()
+        self.update_grid()
+        self.start_timer()
 
-with col2:
-    st.subheader("Controls")
-    if st.button("Scramble"):
-        scramble()
-        st.experimental_rerun()
-    if st.button("Random"):
-        random_scramble()
-        st.experimental_rerun()
-    if st.button("Solve"):
-        solve()
-        st.experimental_rerun()
-    if st.session_state.solution_path and st.session_state.solution_step < len(st.session_state.solution_path) - 1:
-        if st.button("Next Move"):
-            next_move()
-            st.experimental_rerun()
-    st.button("Undo", on_click=undo)
-    st.button("Redo", on_click=redo)
-    st.selectbox("Difficulty", ["Easy", "Medium", "Hard"], key='difficulty')
-    st.subheader("Leaderboard")
-    if st.session_state.leaderboard:
-        for idx, e in enumerate(st.session_state.leaderboard, 1):
-            st.write(f"{idx}. {e['moves']} moves, {e['time']}s, {e['difficulty']}, {e['date']}")
-    else:
-        st.write("No results yet.")
+    def solve(self):
+        if self.solving: return
+        self.solving = True
+        self.disable_controls()
+        def animate():
+            solution = a_star(self.state, self.env.goal)
+            if not solution:
+                self.status_label['text'] = "No solution found."
+                self.solving = False
+                self.enable_controls()
+                return
+            for s in solution[1:]:
+                self.state = s
+                self.move_count += 1
+                self.history.append(self.state)
+                self.future = []
+                self.update_grid()
+                self.master.update()
+                time.sleep(0.25)
+            self.solving = False
+            self.enable_controls()
+        Thread(target=animate).start()
 
-# --- Timer Update ---
-if st.session_state.timer_running:
-    update_timer()
+    def move_tile(self, x, y):
+        if self.solving: return
+        zero_idx = self.state.index(0)
+        zx, zy = divmod(zero_idx, 3)
+        if abs(zx - x) + abs(zy - y) == 1:
+            lst = list(self.state)
+            idx = x * 3 + y
+            lst[zero_idx], lst[idx] = lst[idx], lst[zero_idx]
+            self.state = tuple(lst)
+            self.move_count += 1
+            self.history.append(self.state)
+            self.future = []
+            if self.move_count == 1:
+                self.start_timer()
+            self.update_grid()
+
+    def undo(self):
+        if self.solving: return
+        if len(self.history) > 1:
+            self.future.append(self.history.pop())
+            self.state = self.history[-1]
+            self.move_count = max(0, self.move_count - 1)
+            self.update_grid()
+
+    def redo(self):
+        if self.solving: return
+        if self.future:
+            self.state = self.future.pop()
+            self.history.append(self.state)
+            self.move_count += 1
+            self.update_grid()
+
+    def disable_controls(self):
+        self.scramble_btn['state'] = tk.DISABLED
+        self.solve_btn['state'] = tk.DISABLED
+        self.random_btn['state'] = tk.DISABLED
+        self.undo_btn['state'] = tk.DISABLED
+        self.redo_btn['state'] = tk.DISABLED
+        self.difficulty_menu['state'] = tk.DISABLED
+        for row in self.buttons:
+            for btn in row:
+                btn['state'] = tk.DISABLED
+
+    def enable_controls(self):
+        self.scramble_btn['state'] = tk.NORMAL
+        self.solve_btn['state'] = tk.NORMAL
+        self.random_btn['state'] = tk.NORMAL
+        self.undo_btn['state'] = tk.NORMAL
+        self.redo_btn['state'] = tk.NORMAL
+        self.difficulty_menu['state'] = tk.NORMAL
+        for row in self.buttons:
+            for btn in row:
+                btn['state'] = tk.NORMAL
+
+    def save_leaderboard_entry(self):
+        if self.move_count == 0 or self.elapsed_time < 0.01:
+            return
+        entry = {
+            'moves': self.move_count,
+            'time': round(self.elapsed_time, 2),
+            'difficulty': self.difficulty.get(),
+            'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        entries = self.load_leaderboard()
+        entries.append(entry)
+        entries.sort(key=lambda e: (e['moves'], e['time']))
+        entries = entries[:self.LEADERBOARD_SIZE]
+        with open(self.LEADERBOARD_FILE, 'w') as f:
+            for e in entries:
+                f.write(f"{e['moves']},{e['time']},{e['difficulty']},{e['date']}\n")
+
+    def load_leaderboard(self):
+        entries = []
+        if os.path.exists(self.LEADERBOARD_FILE):
+            with open(self.LEADERBOARD_FILE, 'r') as f:
+                for line in f:
+                    parts = line.strip().split(',')
+                    if len(parts) == 4:
+                        moves, time_val, diff, date = parts
+                        entries.append({
+                            'moves': int(moves),
+                            'time': float(time_val),
+                            'difficulty': diff,
+                            'date': date
+                        })
+        return entries
+
+    def show_leaderboard(self):
+        entries = self.load_leaderboard()
+        win = tk.Toplevel(self.master)
+        win.title("Leaderboard")
+        win.configure(bg="#222")
+        tk.Label(win, text="Top Results", font=('Arial', 16, 'bold'), bg="#222", fg="#fff").pack(pady=8)
+        if not entries:
+            tk.Label(win, text="No results yet.", font=('Arial', 12), bg="#222", fg="#fff").pack(pady=8)
+        else:
+            for idx, e in enumerate(entries, 1):
+                tk.Label(win, text=f"{idx}. {e['moves']} moves, {e['time']}s, {e['difficulty']}, {e['date']}",
+                         font=('Arial', 12), bg="#222", fg="#fff").pack(anchor='w', padx=20)
+        tk.Button(win, text="Close", command=win.destroy).pack(pady=10)
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    gui = EightPuzzleGUI(root)
+    root.mainloop() 
